@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<launch>
+
+    <node pkg="offb_posctl" type="offb_posctl_SQP" name="offb_posctl_SQP" output="screen"> </node>
+    <node pkg="offb_posctl" type="SQP_control" name="SQP_control" output="screen"> </node>
+	<!-- <node pkg="rosbag" type="record" name="rosbag_record_msgs" args="record -o /home/chenwh/exp_ws/src/offb_posctl/data/log/SQP /SQP_controlstate /drone/current_rpy /current_relative_postwist /targeterror /mavros/local_position/odom /odom /time_cost /cmd_vel" output="screen"> </node>-->
+    <!-- <node pkg="rqt_graph" type="rqt_graph" name="rqt_graph"> </node>-->
+
+</launch>

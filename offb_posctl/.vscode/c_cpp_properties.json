@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "",
+        "limitSymbolsToIncludedHeaders": true
+      },
+      "includePath": [
+        "/home/chenwh/exp_ws/devel/include/**",
+        "/home/chenwh/catkin_ws/devel/include/**",
+        "/home/chenwh/mavros_ws/devel/include/**",
+        "/opt/intel/oneapi/tbb/latest/include/**",
+        "/opt/intel/oneapi/dal/2021.2.0/include/**",
+        "/opt/ros/melodic/include/**",
+        "/home/chenwh/mavros_ws/src/mavros/libmavconn/include/**",
+        "/home/chenwh/mavros_ws/src/mavros/mavros/include/**",
+        "/home/chenwh/mavros_ws/src/mavros/mavros_msgs/include/**",
+        "/home/chenwh/catkin_ws/src/sqp/include/**",
+        "/home/chenwh/catkin_ws/src/studio/include/**",
+        "/home/chenwh/mavros_ws/src/mavros/test_mavros/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS"
+    }
+  ],
+  "version": 4
+}

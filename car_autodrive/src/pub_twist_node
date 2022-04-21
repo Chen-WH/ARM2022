@@ -1,0 +1,117 @@
+#!/usr/bin/env python
+
+import rospy
+
+import numpy as np
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Vector3
+from geometry_msgs.msg import Quaternion
+from math import  cos ,sin ,atan2, asin
+import sys
+
+WAFFLE_MAX_LIN_VEL = 3.0
+
+class Autodrive:
+    def __init__(self):
+        self.odom = Odometry()
+        self.origin_twist = Twist()
+        self.update_twist = Twist()
+        self.error_y = 0
+        self.error_y_ctrl = 0
+        self.err_y = 0
+        self.euler = Vector3()
+        self.quaternion = Quaternion()
+        self.yaw_err = 0
+        self.yaw_err_ctrl = 1
+        self. begin_flag = Vector3()
+        self. begin_flag.x = 0.0
+        self.count = 0
+        self.count2 = 0
+        self.flag = False
+
+
+    def begin_run_cb(self, msg):
+        self. begin_flag = msg
+        echo_time = 0
+        if echo_time > 20:
+            print('begin_flag.x:', self. begin_flag.x)
+            echo_time = echo_time -20
+        print('self.begin_flag.x > 3.0:', self.begin_flag.x > 3.0)
+        if self.begin_flag.x > 3.0:
+            self.flag = True
+        elif self.begin_flag.x > 1.0:
+            self.flag = False
+            print('self.begin_flag > 1.0:', self.begin_flag.x > 1.0)
+
+    def odom_cb(self, msg):
+        self.odom = msg
+
+    def cmd_vel_origin_cb(self, msg):
+        self.origin_twist = msg
+
+    def error_diedlock(self, err_y):
+        if abs(err_y) < 0.01:
+            self.err_y = 0.
+        else:
+            self.err_y = err_y
+        return self.err_y
+
+    def euler2quaternion(self, roll, pitch, yaw):
+        self.quaternion.w = cos(roll/2)*cos(pitch/2)*cos(yaw/2) + sin(roll/2)*sin(pitch/2)*sin(yaw/2)
+        self.quaternion.x = sin(roll/2)*cos(pitch/2)*cos(yaw/2) - cos(roll/2)*sin(pitch/2)*sin(yaw/2)
+        self.quaternion.y = cos(roll/2)*sin(pitch/2)*cos(yaw/2) + sin(roll/2)*cos(pitch/2)*sin(yaw/2)
+        self.quaternion.z = cos(roll/2)*cos(pitch/2)*sin(yaw/2) - sin(roll/2)*sin(pitch/2)*cos(yaw/2)
+
+    def quaternion2euler(self, x, y, z, w):
+        self.euler.x = atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        self.euler.y = asin(2.0 * (z * x - w * y))
+        self.euler.z = atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+    def car_autodrive(self):
+        rospy.init_node('pub_twist_node', anonymous=True)
+
+        rate = rospy.Rate(10)
+
+
+        rospy.Subscriber('odom', Odometry, self.odom_cb)
+        rospy.Subscriber('cmd_vel_origin', Twist, self.cmd_vel_origin_cb)
+        # add by lynn
+        rospy.Subscriber('begin_run', Vector3, self.begin_run_cb)
+        # add by lynn
+        twist_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
+        posi_P = 1
+        yaw_P = 1
+
+        num = 0
+
+        while not rospy.is_shutdown():
+            self.quaternion2euler(self.odom.pose.pose.orientation.x,self.odom.pose.pose.orientation.y,self.odom.pose.pose.orientation.z,self.odom.pose.pose.orientation.w)
+            
+            self.yaw_err = 0 - self.euler.z
+            self.yaw_err_ctrl = yaw_P * self.yaw_err
+            self.error_y = 0 - self.odom.pose.pose.position.y
+            self.error_y = self.error_diedlock(self.error_y)
+            self.error_y_ctrl = posi_P * self.error_y
+            self.update_twist.angular.z = self.error_y_ctrl + self.yaw_err_ctrl
+
+            # uniform speed
+            if self.flag:
+                self.count += 1
+                if self.count == 3:
+                    self.count = 0
+                    # if self.update_twist.linear.x < WAFFLE_MAX_LIN_VEL:
+                    if self.update_twist.linear.x < 10:
+                        num += 0.1  # a = 1 m/s2
+                        self.update_twist.linear.x = WAFFLE_MAX_LIN_VEL*sin(num)  # a = 1 m/s2
+            else:
+                self.update_twist.linear.x = 0
+            twist_pub.publish(self.update_twist)
+            rate.sleep()
+
+if __name__=="__main__":
+    try:
+        car = Autodrive()
+        car.car_autodrive()
+    except rospy.ROSInterruptException:
+        pass

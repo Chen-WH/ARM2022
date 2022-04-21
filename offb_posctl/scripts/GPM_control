@@ -1,0 +1,164 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# coding=utf-8
+import sys
+
+if sys.getdefaultencoding() != 'utf-8':
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
+
+import rospy
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TwistStamped
+from offb_posctl.msg import controlstate  # 发布自定义消息
+import time
+from scipy.optimize import minimize
+import numpy as np
+import time
+
+n = 7
+t0 = 0
+tf = 2  # 积分时间
+discretized_point_persecond = 50
+pointnumber = tf * discretized_point_persecond  # 离散点数
+k = np.array([50, 50])
+# c = np.array([0, 0])  # air drag effect in x & z
+c = np.array([1.5, 0.38])
+co = 0.5 * (tf - t0)
+g = 9.8
+px_ini = -3
+pz_ini = 0
+vx_ini = 0
+vz_ini = 0
+va_ini = 0  # absolute velocity of plane
+# ini = np.array([[px_ini], [pz_ini], [vx_ini], [vz_ini], [va_ini]])
+controlstate_msg = controlstate()  # 要发布的控制量消息
+currentupdateflag = False  # 是否计算控制量
+tau = np.linspace(-1, 1, pointnumber)
+
+# D matrix
+D = np.loadtxt(open("/home/chenwh/exp_ws/src/offb_posctl/data/D.csv", "rb"), delimiter=",", skiprows=0)  # array
+#  Gauss weights
+omega = np.loadtxt(open("/home/chenwh/exp_ws/src/offb_posctl/data/omega.csv", "rb"), delimiter=",", skiprows=0)  # array
+# Lagrange coefficient of x
+L1 = np.loadtxt(open("/home/chenwh/exp_ws/src/offb_posctl/data/L1.csv", "rb"), delimiter=",", skiprows=0)  # array
+# Lagrange coefficient of u
+L2 = np.loadtxt(open("/home/chenwh/exp_ws/src/offb_posctl/data/L2.csv", "rb"), delimiter=",", skiprows=0)  # array
+print('GPM_node')
+
+def J(x):
+    X1 = x[0: n]
+    X2 = x[n: 2 * n]
+    U1 = x[5 * n: 6 * n]
+    U2 = x[6 * n: 7 * n]
+    return co * np.dot(omega, (0.5 * (U1 - 9.8) ** 2 + 0.5 * U2 ** 2 + k[0] * (X1 + 3) ** 2 + k[1] * (X1 * U2 + X2) ** 2))
+
+def fast_jac(x):
+    h = 1e-11
+    N = x.shape[0]
+    jac = np.zeros_like(x)
+    f_0 = J(x)
+    for i in range(N):
+        x_d = np.copy(x)
+        x_d[i] += h
+        f_d = J(x_d)
+        jac[i] = (f_d - f_0) / h
+    return jac
+
+def mycon(x):
+    X1 = x[0: n]
+    X2 = x[n: 2 * n]
+    X3 = x[2 * n: 3 * n]
+    X4 = x[3 * n: 4 * n]
+    X5 = x[4 * n: 5 * n]
+    U1 = x[5 * n: 6 * n]
+    U2 = x[6 * n: 7 * n]
+
+    Ceq1 = np.dot(D, np.append(px_ini, X1)) - co * X3
+    Ceq2 = np.dot(D, np.append(pz_ini, X2)) - co * X4
+    Ceq3 = np.dot(D, np.append(vx_ini, X3)) - co * (g * U2 - c[0] * X5)
+    Ceq4 = np.dot(D, np.append(vz_ini, X4)) - co * (U1 - g - c[1] * X5)
+    Ceq5 = np.dot(D, np.append(va_ini, X5)) - co * (g * U2 - c[0] * X5)
+    # return np.hstack((Ceq1, Ceq2, Ceq3, Ceq4, Ceq5))
+    return np.hstack((Ceq1, Ceq2, Ceq3, Ceq4, Ceq5))
+
+
+def do_process(result):
+    x = result.x.reshape(7, n)
+    ini = np.array([[px_ini], [pz_ini], [vx_ini], [vz_ini], [va_ini]])
+    poly_x = np.dot(np.hstack((ini, x[0:5, :])), L1)  # 拟合出的x的系数矩阵
+    poly_u = np.dot(x[5:7, :], L2)  # 拟合出的u的系数矩阵
+
+    # 将数据代入系数矩阵求x和u
+    x1 = np.polyval(poly_x[0], tau)
+    x2 = np.polyval(poly_x[1], tau)
+    x3 = np.polyval(poly_x[2], tau)
+    x4 = np.polyval(poly_x[3], tau)
+    x5 = np.polyval(poly_x[4], tau)
+    u1 = np.polyval(poly_u[0], tau)
+    u2 = np.polyval(poly_u[1], tau)
+    # print('thrust :{}'.format(u1[0:5]))
+    # print(u1)
+    return np.vstack((x1, x2, x3, x4, u1, u2))
+
+
+def pos_twist_callback(data):
+    global px_ini, pz_ini, vx_ini, vz_ini, currentupdateflag
+    px_ini = data.pose.pose.position.x  # relative pos
+    pz_ini = data.pose.pose.position.z
+    vx_ini = data.twist.twist.linear.x
+    vz_ini = data.twist.twist.linear.z
+    currentupdateflag = True
+    # print('x :{0},:{1},:{2},:{3},:{4}'.format(px_ini,pz_ini,vx_ini,vz_ini,va_ini))
+
+
+def plane_vel_callback(data):
+    global va_ini
+    va_ini = data.twist.linear.x
+
+# ------------------------- take the air-resistance into consideration ----------------------------#
+
+def thread_offboard():
+    global currentupdateflag, discretized_point_persecond
+    rospy.init_node('GPM_control', anonymous=True)
+    rate = rospy.Rate(10)
+    initial_guess = np.zeros((7 * n))
+    constraint = [dict(type='eq', fun=mycon)]
+    rospy.Subscriber("current_relative_postwist", Odometry, pos_twist_callback)
+    rospy.Subscriber("mavros/local_position/velocity_local", TwistStamped, plane_vel_callback)  # plane veocity
+
+    pub = rospy.Publisher("GPM_controlstate", controlstate, queue_size=10)
+
+    while not (rospy.is_shutdown()):
+        if currentupdateflag:
+            controlstate_msg.inicounter = 0
+            controlstate_msg.discrepointpersecond = discretized_point_persecond
+            controlstate_msg.arraylength = pointnumber
+            controlstate_msg.thrustarray = []
+            controlstate_msg.thetaarray = []
+
+            start = time.time()
+            # print('x :{0},:{1},:{2},:{3},:{4}'.format(px_ini,pz_ini,vx_ini,vz_ini,va_ini))
+            # core calculate code
+            result = minimize(J, initial_guess, method='SLSQP', tol=1e-3, constraints=constraint, jac=fast_jac)
+            # result = minimize(J, np.zeros((7 * n)), method='SLSQP', tol=1e-6, constraints=constraint, jac=fast_jac, bounds=Bounds)
+            res = do_process(result)
+            # core calculate code
+            end = time.time()
+            running_time = end - start
+            print('time cost : %.5f sec' % running_time)
+
+            # publish controlstate
+            controlstate_msg.thrustarray = res[4,:]
+            controlstate_msg.thetaarray = res[5, :]
+            controlstate_msg.stateXarray = res[0, :]
+            controlstate_msg.stateZarray = res[1, :]
+            controlstate_msg.stateVXarray = res[2, :]
+            controlstate_msg.stateVZarray = res[3, :]
+            pub.publish(controlstate_msg)
+            currentupdateflag = False
+        rate.sleep()
+
+
+if __name__ == '__main__':  # 主函数
+    thread_offboard()

@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+  <!--<arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>-->
+  <!--<param name="model" value="$(arg model)"/>-->
+
+  <!-- turtlebot3_teleop_key already has its own built in velocity smoother -->
+  <node pkg="car_autodrive" type="turtlebot3_teleop" name="turtlebot3_teleop"  output="screen"/>
+  <node pkg="car_autodrive" type="pub_twist_node" name="pub_twist_node"  output="screen"/>
+
+</launch>
